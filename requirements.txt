@@ -1,0 +1,32 @@
+# 桌面助手 依赖清单
+# pip install -r requirements.txt
+
+# GUI
+PyQt6>=6.0
+
+# AI (DeepSeek via OpenAI SDK)
+openai>=2.0
+
+# 配置
+python-dotenv
+
+# 文档解析
+python-docx
+openpyxl
+PyPDF2
+chardet
+
+# 向量知识库
+chromadb>=1.0
+
+# LangChain（Agent 工具调用 + 文档解析 + 文本切分）
+langchain>=1.0
+langchain-openai>=1.0
+langchain-community>=0.3
+langchain-text-splitters>=1.0
+
+# 桌宠GIF支持
+Pillow>=10.0
+
+# 全局热键
+pynput
