@@ -45,3 +45,4 @@ _debug_*.txt
 
 # Claude Code
 .claude/
+CLAUDE.local.md
