@@ -9,7 +9,6 @@ import os
 import chardet
 
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_core.documents import Document
 
 # ================================================================
 #  可识别为纯文本的扩展名
@@ -62,39 +61,6 @@ def parse_file(filepath: str) -> tuple[str | None, str | None]:
     return content or None, None
 
 
-def load_documents(filepath: str) -> list[Document]:
-    """加载文件并返回 LangChain Document 对象列表。
-
-    每个 Document 带 metadata（source、page 等），可直接喂给
-    RecursiveCharacterTextSplitter.split_documents()。
-    """
-    if not os.path.isfile(filepath):
-        raise FileNotFoundError(f"文件不存在: {filepath}")
-
-    ext = os.path.splitext(filepath)[1].lower()
-
-    if ext in _TEXT_EXTENSIONS:
-        text = _read_text_file(filepath)
-        if not text.strip():
-            return []
-        return [Document(
-            page_content=text,
-            metadata={"source": filepath, "format": ext.lstrip('.')},
-        )]
-    elif ext == '.pdf':
-        docs = PyPDFLoader(filepath).load()
-    elif ext == '.docx':
-        docs = _DocxLoader(filepath).load()
-    elif ext in ('.xlsx', '.xls'):
-        docs = _ExcelLoader(filepath).load()
-    else:
-        raise ValueError(f"暂不支持解析「{ext}」格式的文件")
-
-    for doc in docs:
-        doc.page_content = doc.page_content.strip()
-    return [d for d in docs if d.page_content]
-
-
 # ================================================================
 #  编码检测（chardet，自动识别 UTF-8 / GBK 等）
 # ================================================================
@@ -113,13 +79,7 @@ def _read_text_file(filepath: str) -> str:
     # chardet 对中文有时误判为 GB2312（是 GBK 的子集），统一用 GBK
     if encoding.upper() in ('GB2312', 'GB18030'):
         encoding = 'gbk'
-    confidence = detected.get('confidence', 0)
-    # 低置信度 → 用 UTF-8 兜底
-    if confidence is not None and confidence < 0.6:
-        encodings_to_try = [encoding, 'utf-8', 'gbk', 'latin-1']
-    else:
-        encodings_to_try = [encoding, 'utf-8', 'gbk', 'latin-1']
-    for enc in encodings_to_try:
+    for enc in (encoding, 'utf-8', 'gbk', 'latin-1'):
         try:
             return raw.decode(enc)
         except (UnicodeDecodeError, LookupError):
@@ -173,58 +133,3 @@ def _parse_xlsx(filepath: str) -> str:
     return '\n'.join(lines)
 
 
-# ================================================================
-#  自定义 Loader —— docx / xlsx 返回统一 Document 对象
-# ================================================================
-
-class _DocxLoader:
-    """轻量 docx → List[Document]，基于 python-docx（无需 docx2txt）"""
-
-    def __init__(self, filepath: str):
-        self._path = filepath
-
-    def load(self) -> list[Document]:
-        from docx import Document as DocxDocument
-
-        doc = DocxDocument(self._path)
-        text = '\n'.join(p.text for p in doc.paragraphs if p.text.strip())
-        if not text:
-            return []
-        return [Document(
-            page_content=text,
-            metadata={"source": self._path, "format": "docx"},
-        )]
-
-
-class _ExcelLoader:
-    """轻量 xlsx → List[Document]，基于 openpyxl（无需 unstructured）"""
-
-    def __init__(self, filepath: str):
-        self._path = filepath
-
-    def load(self) -> list[Document]:
-        from openpyxl import load_workbook
-
-        wb = load_workbook(self._path, read_only=True)
-        docs: list[Document] = []
-
-        for name in wb.sheetnames:
-            ws = wb[name]
-            rows: list[str] = []
-            row_count = 0
-            for row in ws.iter_rows(values_only=True):
-                row_str = '\t'.join(str(c) if c is not None else '' for c in row)
-                if row_str.strip():
-                    rows.append(row_str)
-                    row_count += 1
-                    if row_count > 200:
-                        rows.append("...（表格行数过多，已截断）")
-                        break
-            if rows:
-                docs.append(Document(
-                    page_content=f"=== Sheet: {name} ===\n" + '\n'.join(rows),
-                    metadata={"source": self._path, "sheet": name, "format": "xlsx"},
-                ))
-
-        wb.close()
-        return docs

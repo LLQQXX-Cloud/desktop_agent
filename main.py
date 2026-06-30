@@ -84,15 +84,26 @@ def main():
     # ---- 聊天窗 ----
     chat = ChatWindow(memory=memory)
     convs = memory.list_conversations()
-    default_id = convs[0]["id"] if convs else None
-    chat.set_conversations(convs, select_id=default_id)
-    if default_id:
+    if convs:
+        default_id = convs[0]["id"]
+        chat.set_conversations(convs, select_id=default_id)
         ai.set_conversation(default_id)
-        chat.load_conversation(default_id, memory.get_history(default_id, limit=30))
+        history = memory.get_history(default_id, limit=30)
+        chat.load_conversation(default_id, history)
+        if not history:
+            chat.show_greeting()
+    else:
+        # 没有对话 → 直接新对话状态
+        chat.set_conversations([])
+        chat._pending_new_conv = True
+        chat.show_greeting()
 
     def on_conversation_changed(cid: str):
         ai.set_conversation(cid)
-        chat.load_conversation(cid, memory.get_history(cid, limit=30))
+        history = memory.get_history(cid, limit=30)
+        chat.load_conversation(cid, history)
+        if not history:
+            chat.show_greeting()
     chat.conversation_changed.connect(on_conversation_changed)
 
     # ---- 发送消息 ----
@@ -108,9 +119,9 @@ def main():
             return
 
         _sending = True
-        conv_id = chat.current_conversation_id
         pet.set_state("talk")
-        chat.send_msg()
+        chat.send_msg()   # 这里会创建对话（如果是 pending 状态），必须在读 conv_id 之前
+        conv_id = chat.current_conversation_id
 
         att_text, att_map = _parse_attachments(attachments)
         full_text = _build_message(text, att_text)
@@ -154,7 +165,8 @@ def main():
             if conv and conv["title"] == "新对话":
                 title = ai.generate_title(full_text[:80] or "文件对话")
                 memory.rename_conversation(conv_id, title)
-                chat.set_conversations(memory.list_conversations(), select_id=conv_id)
+            # 每次回复完刷新侧边栏（updated_at 已更新，排序生效）
+            chat.set_conversations(memory.list_conversations(), select_id=conv_id)
             pet.set_state("idle")
             nonlocal _sending
             _sending = False

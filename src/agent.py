@@ -612,7 +612,7 @@ class AgentManager:
 # ================================================================
 
 try:
-    from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QThread  # noqa: F811
+    from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot  # noqa: F811
 
     class StreamWorker(QObject):
         """在 QThread 中异步运行 Agent，通过信号将 token 发回主线程"""

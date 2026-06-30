@@ -118,9 +118,6 @@ class PetWindow(QWidget):
         self._current_state = state
         self._show_movie(movies[self._current_index[state]])
 
-    def state(self) -> str:
-        return self._current_state
-
     def _play(self, state: str):
         """播放指定状态（不避重）"""
         movies = self.animations.get(state)
@@ -236,10 +233,6 @@ class PetWindow(QWidget):
         menu.exec(event.globalPos())
 
     # ========== 外部触发的行为 ==========
-    def say(self, text: str):
-        if not self._is_emoji_fallback:
-            self.set_state("talk")
-
     def happy(self):
         if not self._is_emoji_fallback:
             self.set_state("happy")

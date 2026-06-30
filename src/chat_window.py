@@ -4,72 +4,14 @@ import os
 import uuid
 import shutil
 from PyQt6.QtWidgets import (
-    QWidget, QTextEdit, QLineEdit, QPushButton, QVBoxLayout,
+    QWidget, QLineEdit, QPushButton, QVBoxLayout,
     QHBoxLayout, QFrame, QLabel, QGraphicsDropShadowEffect,
     QListWidget, QListWidgetItem, QFileDialog, QMenu, QInputDialog,
-    QMessageBox, QSplitter, QSizePolicy, QScrollArea,
+    QMessageBox, QSplitter, QScrollArea,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
-from PyQt6.QtGui import QColor, QTextCursor, QImage, QTextBlockFormat, QPixmap
+from PyQt6.QtGui import QColor, QImage, QPixmap, QPainter, QBrush, QPen
 
-
-# ============================================================
-#  聊天气泡 HTML 模板
-# ============================================================
-
-USER_BUBBLE_HTML = (
-    '<table width="100%" cellspacing="0" cellpadding="0">'
-    '<tr><td align="right" style="padding:2px 12px;">'
-    '<span style="display:inline-block;'
-    'background-color:#007AFF;'
-    'color:#FFFFFF;'
-    'padding:9px 14px;'
-    'border-radius:16px;'
-    'font-size:13px;'
-    'max-width:78%;'
-    'text-align:left;'
-    'line-height:1.5;'
-    '">'
-    '{text}'
-    '</span>'
-    '</td></tr></table>'
-)
-
-BOT_BUBBLE_HTML = (
-    '<table width="100%" cellspacing="0" cellpadding="0">'
-    '<tr><td align="left" style="padding:2px 12px;">'
-    '<span style="display:inline-block;'
-    'background-color:#F0F0F3;'
-    'color:#1A1A1A;'
-    'padding:9px 14px;'
-    'border-radius:16px;'
-    'font-size:13px;'
-    'max-width:78%;'
-    'text-align:left;'
-    'line-height:1.5;'
-    '">'
-    '{text}'
-    '</span>'
-    '</td></tr></table>'
-)
-
-FILE_CARD_HTML = (
-    '<table width="100%" cellspacing="0" cellpadding="0">'
-    '<tr><td align="{align}" style="padding:2px 12px;">'
-    '<span style="display:inline-block;'
-    'background-color:#F5F5F7;'
-    'color:#1A1A1A;'
-    'padding:10px 14px;'
-    'border-radius:12px;'
-    'border:1px solid #E5E5EA;'
-    'font-size:13px;'
-    'line-height:1.6;'
-    '">'
-    '📄 <b>{filename}</b><br>'
-    '<span style="font-size:11px;color:#8E8E93;">文件已保存 · {size}</span>'
-    '</span>'
-    '</td></tr></table>'
-)
 
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'}
 
@@ -138,7 +80,7 @@ QFrame#sidebar {
 }
 
 QPushButton#newConvBtn {
-    background-color: #007AFF;
+    background-color: #34C759;
     color: #FFFFFF;
     border: none;
     border-radius: 10px;
@@ -148,7 +90,7 @@ QPushButton#newConvBtn {
     margin: 10px 10px 6px 10px;
 }
 QPushButton#newConvBtn:hover {
-    background-color: #0066D6;
+    background-color: #2DB84D;
 }
 
 QListWidget#convList {
@@ -174,16 +116,44 @@ QListWidget#convList::item:hover {
 QListWidget#convList::item:selected:hover {
     background-color: #0066D6;
 }
+QListWidget#convList::item:selected:!active {
+    background-color: #007AFF;
+    color: #FFFFFF;
+}
 
 /* ---- 对话区域 ---- */
-QTextEdit#chatBox {
+QScrollArea#chatBox {
     background-color: #FFFFFF;
     border: none;
-    color: #1A1A1A;
+}
+
+QWidget#chatContainer {
+    background-color: #FFFFFF;
+}
+
+QLabel#userBubble {
+    background-color: #007AFF;
+    color: #FFFFFF;
+    border-radius: 20px;
+    padding: 10px 16px;
     font-size: 13px;
-    padding: 8px 2px;
-    selection-background-color: #007AFF;
-    selection-color: #FFFFFF;
+}
+
+QLabel#botBubble {
+    background-color: #F0F0F3;
+    color: #1A1A1A;
+    border-radius: 20px;
+    padding: 10px 16px;
+    font-size: 13px;
+}
+
+QLabel#fileCard {
+    background-color: #F5F5F7;
+    color: #1A1A1A;
+    border: 1px solid #E5E5EA;
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-size: 13px;
 }
 
 /* ---- 附件预览栏 ---- */
@@ -317,63 +287,87 @@ QSplitter::handle {
 
 
 # ============================================================
+#  _BubbleFrame — 手绘圆角气泡（不用 QSS border-radius，100% 可靠）
+# ============================================================
+
+class _BubbleFrame(QFrame):
+    """自定义 QFrame，paintEvent 手绘圆角背景"""
+
+    def __init__(self, bg_color: str, radius: int = 20, parent=None):
+        super().__init__(parent)
+        self._bg = QColor(bg_color)
+        self._radius = radius
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setAutoFillBackground(False)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(Qt.PenStyle.NoPen))
+        painter.setBrush(QBrush(self._bg))
+        painter.drawRoundedRect(self.rect(), self._radius, self._radius)
+
+
+# ============================================================
 #  _ChatBox — 自动气泡 + 图片/文件渲染
 # ============================================================
 
-class _ChatBox(QTextEdit):
-    """QTextEdit 子类，支持文字气泡、内联图片、文件卡片"""
+class _ChatBox(QScrollArea):
+    """聊天气泡容器 — QScrollArea + _BubbleFrame(手绘圆角) 包 QLabel(文字)"""
+
+    BUBBLE_MAX_RATIO = 0.78
+
+    _USER_TEXT = "background:transparent; color:#FFFFFF; font-size:13px;"
+    _BOT_TEXT  = "background:transparent; color:#1A1A1A; font-size:13px;"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setObjectName("chatBox")
+
+        self._container = QWidget()
+        self._container.setObjectName("chatContainer")
+        self._layout = QVBoxLayout(self._container)
+        self._layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._layout.setContentsMargins(4, 8, 4, 8)
+        self._layout.setSpacing(6)
+        self._layout.addStretch()
+        self.setWidget(self._container)
+
+        self._stream_frame: QFrame | None = None
+
+    # ---- 公开方法 ----
 
     def append_message(self, role: str, text: str):
-        escaped = _html.escape(text).replace("\n", "<br>")
-        if role == "user":
-            bubble = USER_BUBBLE_HTML.format(text=escaped)
-        else:
-            bubble = BOT_BUBBLE_HTML.format(text=escaped)
-        self._insert_html(bubble)
+        self._add_row(self._make_bubble(text, role == "user"), role == "user")
 
     def append_image(self, role: str, path: str):
-        """内联图片 — 用 QTextCursor 插入（绕过只读限制）"""
         img = QImage(path)
         if img.isNull():
             self.append_message(role, f"[图片加载失败] {os.path.basename(path)}")
             return
-
         if img.width() > 260:
             img = img.scaledToWidth(260, Qt.TransformationMode.SmoothTransformation)
-
-        align = Qt.AlignmentFlag.AlignRight if role == "user" else Qt.AlignmentFlag.AlignLeft
-
-        was_readonly = self.isReadOnly()
-        if was_readonly:
-            self.setReadOnly(False)
-
-        self.moveCursor(QTextCursor.MoveOperation.End)
-        cursor = self.textCursor()
-
-        block_fmt = QTextBlockFormat()
-        block_fmt.setAlignment(align)
-        block_fmt.setTopMargin(4)
-        block_fmt.setBottomMargin(4)
-        cursor.insertBlock(block_fmt)
-        cursor.insertImage(img)
-
-        normal_fmt = QTextBlockFormat()
-        normal_fmt.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        cursor.insertBlock(normal_fmt)
-
-        if was_readonly:
-            self.setReadOnly(True)
-
-        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+        label = QLabel()
+        label.setPixmap(QPixmap.fromImage(img))
+        label.setMaximumWidth(260)
+        label.setStyleSheet("border-radius:12px;")
+        self._add_row(label, role == "user")
 
     def append_file_card(self, role: str, filename: str, size_str: str):
-        align = "right" if role == "user" else "left"
-        html = FILE_CARD_HTML.format(
-            align=align,
-            filename=_html.escape(filename),
-            size=size_str,
+        text = (f'📄 <b>{_html.escape(filename)}</b><br>'
+                f'<span style="font-size:11px; color:#8E8E93;">'
+                f'文件已保存 · {size_str}</span>')
+        label = QLabel(text)
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setWordWrap(True)
+        label.setMaximumWidth(int(self.width() * self.BUBBLE_MAX_RATIO))
+        label.setStyleSheet(
+            "background-color:#F5F5F7; color:#1A1A1A; "
+            "border:1px solid #E5E5EA; border-radius:12px; padding:10px 14px; font-size:13px;"
         )
-        self._insert_html(html)
+        self._add_row(label, role == "user")
 
     def append(self, text: str):
         if text.startswith("你："):
@@ -381,81 +375,110 @@ class _ChatBox(QTextEdit):
         elif text.startswith("助手："):
             self.append_message("assistant", text[3:])
         else:
-            was_readonly = self.isReadOnly()
-            if was_readonly:
-                self.setReadOnly(False)
-            self.moveCursor(QTextCursor.MoveOperation.End)
-            self.insertPlainText(text + "\n")
-            if was_readonly:
-                self.setReadOnly(True)
-            self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+            self._add_row(self._make_bubble(text, False), False)
 
-    def _insert_html(self, html: str):
-        was_readonly = self.isReadOnly()
-        if was_readonly:
-            self.setReadOnly(False)
-        self.moveCursor(QTextCursor.MoveOperation.End)
-        self.insertHtml(html)
-        if was_readonly:
-            self.setReadOnly(True)
-        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+    def clear(self):
+        self._stream_frame = None
+        self._clear_messages()
 
-    # ---- 流式输出支持 ----
+    # ---- 流式输出 ----
+
     def start_streaming(self):
-        """插入空的 bot 气泡（带闪烁光标），记录起始位置"""
-        self._stream_buffer = ""
-        self._stream_cursor_pos = None
-        # 插入占位气泡
-        html = BOT_BUBBLE_HTML.format(text='<span style="color:#8E8E93;">▊</span>')
-        self._insert_html(html)
-        # 记录气泡在文档中的起始位置（用于后续替换）
-        cursor = self.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        self._stream_anchor = cursor.position()
+        frame = self._make_bubble("▊", False)
+        row = QHBoxLayout()
+        row.setContentsMargins(8, 0, 8, 0)
+        row.addWidget(frame)
+        row.addStretch()
+        self._layout.insertLayout(self._layout.count() - 1, row)
+        self._stream_frame = frame
+        self._scroll_to_bottom()
 
-    def update_streaming(self, text: str):
-        """替换流式气泡的内容为当前累积文本 + 闪烁光标"""
-        if not hasattr(self, '_stream_anchor'):
+    def update_streaming(self, text: str, rich_text: bool = False):
+        if not self._stream_frame:
             return
-        self._stream_buffer = text
-        was_readonly = self.isReadOnly()
-        if was_readonly:
-            self.setReadOnly(False)
-        # 选中从 anchor 到末尾的内容
-        cursor = self.textCursor()
-        cursor.setPosition(self._stream_anchor)
-        cursor.movePosition(QTextCursor.MoveOperation.End,
-                           QTextCursor.MoveMode.KeepAnchor)
-        cursor.removeSelectedText()
-        # 重新插入
-        escaped = _html.escape(text).replace("\n", "<br>")
-        display = escaped + '<span style="color:#8E8E93;">▊</span>'
-        cursor.insertHtml(BOT_BUBBLE_HTML.format(text=display))
-        if was_readonly:
-            self.setReadOnly(True)
-        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+        inner = self._stream_frame.findChild(QLabel)
+        if inner:
+            inner.setTextFormat(Qt.TextFormat.RichText if rich_text else Qt.TextFormat.PlainText)
+            inner.setText(text + "▊")
+        self._scroll_to_bottom()
 
     def finish_streaming(self):
-        """移除闪烁光标，定稿气泡"""
-        if not hasattr(self, '_stream_anchor') or self._stream_anchor is None:
+        if not self._stream_frame:
             return
-        text = self._stream_buffer
-        was_readonly = self.isReadOnly()
-        if was_readonly:
-            self.setReadOnly(False)
-        cursor = self.textCursor()
-        cursor.setPosition(self._stream_anchor)
-        cursor.movePosition(QTextCursor.MoveOperation.End,
-                           QTextCursor.MoveMode.KeepAnchor)
-        cursor.removeSelectedText()
-        if text:  # 有内容才渲染气泡
-            escaped = _html.escape(text).replace("\n", "<br>")
-            cursor.insertHtml(BOT_BUBBLE_HTML.format(text=escaped))
-        if was_readonly:
-            self.setReadOnly(True)
-        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
-        self._stream_buffer = ""
-        self._stream_anchor = None
+        inner = self._stream_frame.findChild(QLabel)
+        if inner:
+            t = inner.text()
+            inner.setTextFormat(Qt.TextFormat.PlainText)
+            inner.setText(t[:-1] if t.endswith("▊") else t)
+        self._stream_frame = None
+
+    # ---- 内部 ----
+
+    def _make_bubble(self, text: str, is_user: bool) -> _BubbleFrame:
+        """_BubbleFrame（手绘圆角背景）包 QLabel（文字）"""
+        frame = _BubbleFrame("#007AFF" if is_user else "#F0F0F3", radius=20)
+
+        inner = QLabel(text)
+        inner.setWordWrap(True)
+        inner.setTextFormat(Qt.TextFormat.PlainText)
+        inner.setMaximumWidth(int(self.width() * self.BUBBLE_MAX_RATIO) - 32)
+        inner.setStyleSheet(self._USER_TEXT if is_user else self._BOT_TEXT)
+
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.addWidget(inner)
+        return frame
+
+    def _add_row(self, widget: QWidget, is_user: bool):
+        row = QHBoxLayout()
+        row.setContentsMargins(8, 0, 8, 0)
+        if is_user:
+            row.addStretch()
+            row.addWidget(widget)
+        else:
+            row.addWidget(widget)
+            row.addStretch()
+        self._layout.insertLayout(self._layout.count() - 1, row)
+        self._scroll_to_bottom()
+
+    def _clear_messages(self):
+        while self._layout.count() > 1:
+            item = self._layout.takeAt(0)
+            if item.layout():
+                self._delayout(item.layout())
+            elif item.widget():
+                item.widget().deleteLater()
+
+    def _delayout(self, layout):
+        while layout.count():
+            child = layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+            elif child.layout():
+                self._delayout(child.layout())
+
+    def _scroll_to_bottom(self):
+        QTimer.singleShot(0, lambda: self.verticalScrollBar().setValue(
+            self.verticalScrollBar().maximum()))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        new_max = int(self.width() * self.BUBBLE_MAX_RATIO) - 32
+        for i in range(self._layout.count()):
+            item = self._layout.itemAt(i)
+            if item and item.layout():
+                row = item.layout()
+                for j in range(row.count()):
+                    w = row.itemAt(j)
+                    if w and w.widget():
+                        widget = w.widget()
+                        # 更新 QFrame 内的 QLabel 最大宽度
+                        inner = widget.findChild(QLabel)
+                        if inner:
+                            inner.setMaximumWidth(new_max)
+                        # 如果是纯 QLabel（图片），更新 widget 自身
+                        elif isinstance(widget, QLabel):
+                            widget.setMaximumWidth(int(self.width() * self.BUBBLE_MAX_RATIO))
 
 
 # ============================================================
@@ -526,6 +549,7 @@ class ChatWindow(QWidget):
         self._memory = memory
         self._upload_dir = upload_dir
         self._current_conv_id = None
+        self._pending_new_conv = False   # 点 + 新对话后等待用户发第一条消息
         self._pending_attachments: list[dict] = []  # 待发附件
         os.makedirs(upload_dir, exist_ok=True)
         self.init_ui()
@@ -556,7 +580,8 @@ class ChatWindow(QWidget):
         # ========== 侧边栏 ==========
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(175)
+        sidebar.setMinimumWidth(140)
+        sidebar.setMaximumWidth(300)
 
         self._new_conv_btn = QPushButton("+ 新对话")
         self._new_conv_btn.setObjectName("newConvBtn")
@@ -581,9 +606,7 @@ class ChatWindow(QWidget):
 
         # 聊天区
         self.chat_box = _ChatBox()
-        self.chat_box.setReadOnly(True)
         self.chat_box.setObjectName("chatBox")
-        self.chat_box.setPlaceholderText("对话记录将在这里显示...")
 
         # ---- 附件预览栏（初始隐藏）----
         self._attach_preview = QFrame()
@@ -633,11 +656,13 @@ class ChatWindow(QWidget):
 
         # ---- 左右分栏 ----
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(1)
+        splitter.setHandleWidth(4)
+        splitter.setChildrenCollapsible(False)
         splitter.addWidget(sidebar)
         splitter.addWidget(right_side)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([175, 445])
 
         # ---- 组装 ----
         outer_layout = QVBoxLayout(self)
@@ -672,11 +697,21 @@ class ChatWindow(QWidget):
         if not text and not attachments:
             return
 
-        # 先插入文字
+        # 确保有有效对话：不存在的就当场创建
+        conv = None
+        if self._current_conv_id and self._memory:
+            conv = self._memory.get_conversation(self._current_conv_id)
+        if not conv and self._memory:
+            self._pending_new_conv = False
+            cid = self._memory.create_conversation()
+            self._current_conv_id = cid
+            self._refresh_list()
+
+        # 插入用户消息
         if text:
             self.chat_box.append(f"你：{text}")
 
-        # 再插入附件
+        # 插入附件
         for att in attachments:
             if att["type"] == "image":
                 self.chat_box.append_image("user", att["path"])
@@ -710,12 +745,16 @@ class ChatWindow(QWidget):
 
     def _flush_stream(self):
         """定时器回调：刷新气泡内容（文本 + 状态栏）"""
-        display = self._stream_buffer
+        buffer = self._stream_buffer
         status = getattr(self, '_thinking_status', '')
         if status:
-            display = f'<i style="color:#8E8E93;">{status}</i>\n{display}'
-        if display:
-            self.chat_box.update_streaming(display)
+            # 状态栏用 HTML 渲染（灰色斜体），token 文本转义后拼接
+            display = f'<span style="color:#8E8E93; font-style:italic;">{status}</span><br>'
+            if buffer:
+                display += _html.escape(buffer)
+            self.chat_box.update_streaming(display, rich_text=True)
+        elif buffer:
+            self.chat_box.update_streaming(_html.escape(buffer), rich_text=False)
 
     def finish_bot_stream(self):
         """结束流式回复：定稿气泡"""
@@ -735,15 +774,18 @@ class ChatWindow(QWidget):
 
     def set_conversations(self, convs: list[dict], select_id: str = None):
         self._conv_list.clear()
+        selected_item = None
         for c in convs:
             item = QListWidgetItem(c["title"])
             item.setData(Qt.ItemDataRole.UserRole, c["id"])
             item.setSizeHint(QSize(0, 36))
             if c["id"] == select_id:
-                item.setSelected(True)
+                selected_item = item
                 self._current_conv_id = c["id"]
             self._conv_list.addItem(item)
-        if not select_id and self._conv_list.count() > 0:
+        if selected_item:
+            self._conv_list.setCurrentItem(selected_item)
+        elif self._conv_list.count() > 0:
             self._conv_list.item(0).setSelected(True)
             self._current_conv_id = self._conv_list.item(0).data(Qt.ItemDataRole.UserRole)
 
@@ -852,14 +894,20 @@ class ChatWindow(QWidget):
     # ========== 侧边栏交互 ==========
 
     def _on_new_conversation(self):
-        if self._memory:
-            cid = self._memory.create_conversation()
-            convs = self._memory.list_conversations()
-            self.set_conversations(convs, select_id=cid)
-            self.conversation_changed.emit(cid)
+        # 不创建对话，只清空右边 + 显示问候语。用户发消息后才真正创建。
+        self._pending_new_conv = True
+        self._current_conv_id = None
+        self._conv_list.clearSelection()
+        self.chat_box.clear()
+        self.show_greeting()
+
+    def show_greeting(self):
+        """新对话问候语（不存历史）"""
+        self.chat_box.append_message("assistant", "我能帮你什么？(╹▽╹)")
 
     def _on_conv_clicked(self, item: QListWidgetItem):
         cid = item.data(Qt.ItemDataRole.UserRole)
+        self._pending_new_conv = False
         if cid and cid != self._current_conv_id:
             self._current_conv_id = cid
             self.conversation_changed.emit(cid)
@@ -894,12 +942,12 @@ class ChatWindow(QWidget):
         elif action == delete_action:
             if self._memory:
                 self._memory.delete_conversation(cid)
+                # 删掉后统一回到新对话界面
+                self._pending_new_conv = True
+                self._current_conv_id = None
                 self._refresh_list()
-                if cid == self._current_conv_id and self._conv_list.count() > 0:
-                    first = self._conv_list.item(0)
-                    new_id = first.data(Qt.ItemDataRole.UserRole)
-                    self._current_conv_id = new_id
-                    self.conversation_changed.emit(new_id)
+                self.chat_box.clear()
+                self.show_greeting()
 
     def _refresh_list(self):
         if self._memory:

@@ -21,11 +21,6 @@ class Memory:
         self.conn.execute("PRAGMA foreign_keys=ON")
         self._init_tables()
 
-        # 确保至少有一个默认对话
-        convs = self.list_conversations()
-        if not convs:
-            self.create_conversation("默认对话")
-
     # ================================================================
     #  建表 + 迁移
     # ================================================================
@@ -146,15 +141,6 @@ class Memory:
             self.conn.execute("DELETE FROM history")
         self.conn.commit()
 
-    def history_count(self, conv_id: str = None) -> int:
-        if conv_id:
-            row = self.conn.execute(
-                "SELECT COUNT(*) FROM history WHERE conversation_id = ?", (conv_id,)
-            ).fetchone()
-        else:
-            row = self.conn.execute("SELECT COUNT(*) FROM history").fetchone()
-        return row[0]
-
     # ================================================================
     #  用户记忆（键值对）
     # ================================================================
@@ -203,6 +189,3 @@ class Memory:
             {"role": r[0], "content": r[1], "time": r[2]}
             for r in reversed(rows)
         ]
-
-    def close(self):
-        self.conn.close()
